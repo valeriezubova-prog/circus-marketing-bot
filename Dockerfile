@@ -21,4 +21,4 @@ COPY . /app
 RUN mkdir -p /data
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "-m", "main"]
+CMD ["python", "-m", "app.main"]
