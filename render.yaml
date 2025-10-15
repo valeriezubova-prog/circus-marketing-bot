@@ -1,0 +1,20 @@
+services:
+  - type: worker
+    name: circus-and-marketing-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    plan: starter
+    envVars:
+      - key: BOT_TOKEN
+        sync: false  # Will be set in Render dashboard
+      - key: ADMIN_USERNAMES
+        value: "vaaalera,vurezchenko"
+      - key: STORAGE_PATH
+        value: "/data/bot.db"
+      - key: TZ
+        value: "Europe/Moscow"
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1
