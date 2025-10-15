@@ -15,10 +15,10 @@ from typing import List
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
@@ -39,7 +39,11 @@ STORAGE_PATH = os.getenv("STORAGE_PATH", "./data/bot.db")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 
-bot = Bot(BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
+# aiogram >= 3.7: parse_mode задаём через DefaultBotProperties
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
+)
 dp = Dispatcher()
 store = PhotoStore(STORAGE_PATH)
 
@@ -202,37 +206,39 @@ async def cb_person(callback: CallbackQuery) -> None:
     if not person:
         await callback.answer("карточка не найдена", show_alert=True)
         return
+
     _, name, title, desc, team, leader, tg_user = person
     caption = person_card_caption(name, title, desc, team, leader, tg_user)
     file_id = await store.get_file_id(slug)
-    # Build navigation keyboard for the card
+
+    # Навигация
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Люди", callback_data="menu:people")
     kb.button(text="🏠 В меню", callback_data="menu:home")
     kb.adjust(2)
+
     if file_id:
-        # If we have a saved file_id, try to edit or send the photo
+        # Если есть сохранённый file_id — пробуем редактировать/прислать фото
         try:
             if callback.message.photo:
-                # Edit existing media if possible
+                # Редактируем существующее медиа
                 await callback.message.edit_media(
-                    InputMediaPhoto(media=file_id, caption=caption, parse_mode=ParseMode.MARKDOWN),
+                    InputMediaPhoto(media=file_id, caption=caption),
                     reply_markup=kb.as_markup(),
                 )
             else:
-                # No photo in message — send new photo
+                # В сообщении нет фото — присылаем новое
                 await bot.send_photo(
                     chat_id=callback.message.chat.id,
                     photo=file_id,
                     caption=caption,
                     reply_markup=kb.as_markup(),
-                    parse_mode=ParseMode.MARKDOWN,
                 )
         except Exception:
-            # Fallback to plain text if something goes wrong
+            # Резерв: просто текст
             await callback.message.edit_text(caption, reply_markup=kb.as_markup())
     else:
-        # No photo cached; send just the text
+        # Нет кэша — только текст
         await callback.message.edit_text(caption, reply_markup=kb.as_markup())
 
 
@@ -267,10 +273,10 @@ async def main() -> None:
     # Use uvloop if available on non-Windows platforms
     try:
         import uvloop  # type: ignore
-
         uvloop.install()
     except Exception:
         pass
+
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
