@@ -1,18 +1,19 @@
 """
-Entry point for the Circus and Marketing bot.
+Entry point для бота «Цирк и маркетинг».
 
-Sets up aiogram Dispatcher, registers handlers and runs long polling.
-Suitable for Render.com or local runs.
+HTML-разметка вместо Markdown — так корректнее работают подчёркивания
+в ссылках и не «слетают» звёздочки/курсив.
 """
 
 import asyncio
+import html
 import os
 import re
-from typing import List, Tuple
+from typing import List
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -26,8 +27,6 @@ from dotenv import load_dotenv
 from . import content
 from .storage import PhotoStore
 
-# ---- Setup & config ---------------------------------------------------------
-
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -39,28 +38,13 @@ STORAGE_PATH = os.getenv("STORAGE_PATH", "/data/bot.db")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 
-# aiogram 3.7+: parse_mode задаётся через default=DefaultBotProperties(...)
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+# ВАЖНО: используем HTML как parse_mode по умолчанию
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 store = PhotoStore(STORAGE_PATH)
 
-# Hotfix 1: если вдруг в контенте остались тильды зачёркивания из MarkdownV2 — уберём
-CLEAN_START_TEXT = (content.START_TEXT or "").replace("~~", "")
 
-# Hotfix 2: гарантированно правим username у Полины (если в контенте он иной)
-_fixed_people = []
-for item in content.PEOPLE:
-    if len(item) != 7:
-        _fixed_people.append(item)
-        continue
-    slug, name, title, desc, team, leader, tg = item
-    if slug == "polina-tikhonenko":
-        tg = "polina_tikhonenko"  # ← нужный логин с подчёркиванием
-    _fixed_people.append((slug, name, title, desc, team, leader, tg))
-content.PEOPLE = _fixed_people  # type: ignore
-
-
-# ---- Keyboards --------------------------------------------------------------
+# ---------- UI helpers ----------
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -82,47 +66,47 @@ def people_list_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# ---- Rendering helpers ------------------------------------------------------
-
 def person_card_caption(
     name: str, title: str, desc: str, team: str, leader: str, tg_user: str
 ) -> str:
-    """Markdown caption for a person's card (экраним подчёркивания)."""
-    def esc(s: str) -> str:
-        return s.replace("_", "\\_")
-
-    cap = (
-        f"*{esc(name)}*\n_{esc(title)}_\n\n"
-        f"{desc}\n\n"
-        f"*Команда:* {esc(team)}\n"
-        f"*Руководитель:* {esc(leader)}"
-    )
-    cap += f"\n\n[Написать в Telegram](https://t.me/{tg_user})"
-    return cap
+    """
+    HTML-подписка к карточке сотрудника.
+    Все пользовательские строки экранируем для безопасности.
+    """
+    esc = html.escape
+    parts = [
+        f"<b>{esc(name)}</b>",
+        f"<i>{esc(title)}</i>",
+        "",
+        esc(desc),
+        "",
+        f"<b>Команда:</b> {esc(team)}",
+        f"<b>Руководитель:</b> {esc(leader)}",
+        "",
+        f'<a href="https://t.me/{tg_user}">Написать в Telegram</a>',
+    ]
+    return "\n".join(parts)
 
 
 def faq_text() -> str:
-    lines = ["*FAQ*"]
+    rows = ["<b>FAQ</b>"]
     for q, label, url in content.FAQ:
-        lines.append(f"• *{q}*\n  👉 [{label}]({url})")
-    return "\n\n".join(lines)
+        rows.append(f"• <b>{html.escape(q)}</b>\n  👉 <a href=\"{url}\">{html.escape(label)}</a>")
+    return "\n\n".join(rows)
 
 
 def materials_text() -> str:
-    lines = ["> всё, что чаще всего ищут (и спрашивают у нас в панике 🔥):"]
+    rows = ["> всё, что чаще всего ищут (и спрашивают у нас в панике 🔥):"]
     for label, url in content.MATERIALS:
-        lines.append(f"• [{label}]({url})")
-    return "\n".join(lines)
+        rows.append(f"• <a href=\"{url}\">{html.escape(label)}</a>")
+    return "\n".join(rows)
 
 
 def tasking_text() -> str:
-    return content.TASKING_TEXT
+    return html.escape(content.TASKING_TEXT)
 
-
-# ---- Search helpers ---------------------------------------------------------
 
 def search_people(query: str) -> List[str]:
-    """Return slugs of people matching the search query."""
     q = query.lower()
     hits: List[str] = []
     for slug, name, title, desc, team, leader, tg in content.PEOPLE:
@@ -132,28 +116,18 @@ def search_people(query: str) -> List[str]:
     return hits[:20]
 
 
-def search_materials(query: str) -> List[Tuple[str, str]]:
-    """Return (label, url) where query occurs in label."""
-    q = query.lower()
-    hits: List[Tuple[str, str]] = []
-    for label, url in content.MATERIALS:
-        if q in label.lower():
-            hits.append((label, url))
-    return hits[:20]
-
-
 def is_admin(msg: Message) -> bool:
     if not msg.from_user or not msg.from_user.username:
         return False
     return msg.from_user.username.lower() in ADMIN_USERNAMES
 
 
-# ---- Handlers ---------------------------------------------------------------
+# ---------- Handlers ----------
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     await message.answer(
-        f"*{content.BOT_NAME}*\n\n{CLEAN_START_TEXT}",
+        f"<b>{html.escape(content.BOT_NAME)}</b>\n\n{html.escape(content.START_TEXT)}",
         reply_markup=main_menu_kb(),
     )
 
@@ -161,7 +135,7 @@ async def cmd_start(message: Message) -> None:
 @dp.callback_query(F.data == "menu:home")
 async def cb_home(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
-        f"*{content.BOT_NAME}*\n\n{CLEAN_START_TEXT}",
+        f"<b>{html.escape(content.BOT_NAME)}</b>\n\n{html.escape(content.START_TEXT)}",
         reply_markup=main_menu_kb(),
     )
 
@@ -197,68 +171,54 @@ async def cb_search(callback: CallbackQuery) -> None:
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ В меню", callback_data="menu:home")
     await callback.message.edit_text(
-        "напиши мне имя, роль или ключевое слово — я найду человека или материал. "
-        "Можно так: `поиск <запрос>` или просто пришли слово.",
+        "напиши мне имя, роль или ключевое слово — я найду человека. "
+        "Формат: <code>поиск &lt;запрос&gt;</code>",
         reply_markup=kb.as_markup(),
     )
 
 
-# Старый «командный» поиск: "поиск что-то"
 @dp.message(F.text.regexp(r"^\s*поиск\s+(.+)$"))
 async def text_search(message: Message) -> None:
     query = re.findall(r"^\s*поиск\s+(.+)$", message.text, flags=re.I)[0]
-    await run_combined_search(message, query)
-
-
-# Новый «умный» свободный поиск по любому тексту
-@dp.message(F.text)
-async def smart_text_lookup(message: Message) -> None:
-    q = (message.text or "").strip()
-    if not q or q.startswith("/"):
-        return
-    # Простые синонимы
-    synonyms = {
-        "ббук": "брендбук",
-        "гайдбук": "брендбук",
-        "гайд": "гайд",
-        "шрифты": "шрифт",
-        "цвета": "цвет",
-    }
-    for k, v in synonyms.items():
-        if k in q.lower():
-            q = v
-            break
-    await run_combined_search(message, q)
-
-
-async def run_combined_search(message: Message, query: str) -> None:
-    """Сначала ищем материалы, затем людей; если пусто — подсказка."""
-    # 1) Материалы
-    mats = search_materials(query)
-    if mats:
-        lines = ["*нашла материалы:*"]
-        for label, url in mats:
-            lines.append(f"• [{label}]({url})")
-        await message.answer("\n".join(lines))
-        return
-
-    # 2) Люди
     slugs = search_people(query)
-    if slugs:
-        kb = InlineKeyboardBuilder()
-        for slug in slugs:
-            name = next(p[1] for p in content.PEOPLE if p[0] == slug)
-            kb.button(text=name, callback_data=f"person:{slug}")
-        kb.button(text="⬅️ В меню", callback_data="menu:home")
-        kb.adjust(1)
-        await message.answer("нашла людей:", reply_markup=kb.as_markup())
+    if not slugs:
+        await message.answer(
+            "ничего не нашла. попробуй по имени или по роли (например: «бренд», «трейд», «исследование»)."
+        )
         return
+    kb = InlineKeyboardBuilder()
+    for slug in slugs:
+        name = next(p[1] for p in content.PEOPLE if p[0] == slug)
+        kb.button(text=name, callback_data=f"person:{slug}")
+    kb.button(text="⬅️ В меню", callback_data="menu:home")
+    kb.adjust(1)
+    await message.answer("нашла вот что:", reply_markup=kb.as_markup())
 
-    # 3) Подсказка
-    await message.answer(
-        "ничего не нашла. попробуй по ключевому слову (например: «гайд», «брендбук», «шрифты») "
-        "или нажми «🔍 Поиск» и введи `поиск <слово>`."
-    )
+
+# Свободный текст — быстрые ответы на популярные слова
+@dp.message(F.text.func(lambda t: isinstance(t, str)))
+async def quick_replies(message: Message) -> None:
+    t = message.text.lower()
+
+    def matches(route: str) -> bool:
+        return any(key in t for key in content.KEYWORD_ROUTES.get(route, set()))
+
+    if matches("materials"):
+        await message.answer(materials_text())
+        return
+    if matches("tasking"):
+        await message.answer(tasking_text())
+        return
+    if matches("faq"):
+        await message.answer(faq_text())
+        return
+    # если ничего не подошло — не перехватываем другие обработчики
+    # но чтобы пользователь получил фидбек:
+    if re.fullmatch(r"\s*[а-яa-z0-9 _\-]{1,32}\s*", t, flags=re.I):
+        await message.answer(
+            "я не уверена, что поняла. Можешь написать «поиск Иван», "
+            "или попробовать слова: «гайд», «брендбук», «Ева», «FAQ»."
+        )
 
 
 @dp.callback_query(F.data.startswith("person:"))
@@ -271,18 +231,17 @@ async def cb_person(callback: CallbackQuery) -> None:
     _, name, title, desc, team, leader, tg_user = person
     caption = person_card_caption(name, title, desc, team, leader, tg_user)
 
-    file_id = await store.get_file_id(slug)
-
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Люди", callback_data="menu:people")
     kb.button(text="🏠 В меню", callback_data="menu:home")
     kb.adjust(2)
 
+    file_id = await store.get_file_id(slug)
     if file_id:
         try:
             if callback.message.photo:
                 await callback.message.edit_media(
-                    InputMediaPhoto(media=file_id, caption=caption, parse_mode=ParseMode.MARKDOWN),
+                    InputMediaPhoto(media=file_id, caption=caption, parse_mode=ParseMode.HTML),
                     reply_markup=kb.as_markup(),
                 )
             else:
@@ -291,7 +250,7 @@ async def cb_person(callback: CallbackQuery) -> None:
                     photo=file_id,
                     caption=caption,
                     reply_markup=kb.as_markup(),
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                 )
         except Exception:
             await callback.message.edit_text(caption, reply_markup=kb.as_markup())
@@ -299,7 +258,7 @@ async def cb_person(callback: CallbackQuery) -> None:
         await callback.message.edit_text(caption, reply_markup=kb.as_markup())
 
 
-# ---- Admin: upload photos ---------------------------------------------------
+# ---------- Admin: загрузка фото ----------
 
 @dp.message(F.photo & F.caption.regexp(r"^/photo\s+([a-z0-9\-]+)$"))
 async def admin_photo_caption(message: Message) -> None:
@@ -309,7 +268,7 @@ async def admin_photo_caption(message: Message) -> None:
     slug = re.findall(r"^/photo\s+([a-z0-9\-]+)$", message.caption.strip())[0]
     file_id = message.photo[-1].file_id
     await store.set_file_id(slug, file_id)
-    await message.reply(f"🔐 фото сохранено для `{slug}`")
+    await message.reply(f"🔐 фото сохранено для <code>{html.escape(slug)}</code>")
 
 
 @dp.message(Command("photo"))
@@ -317,10 +276,13 @@ async def admin_photo_help(message: Message) -> None:
     if not is_admin(message):
         await message.reply("нужны права админа.")
         return
-    await message.reply("пришли фото с подписью `/photo <slug>`\nнапример: `/photo polina-tikhonenko`")
+    await message.reply(
+        "пришли фото с подписью <code>/photo &lt;slug&gt;</code>\n"
+        "например: <code>/photo polina-tikhonenko</code>"
+    )
 
 
-# ---- Entry point ------------------------------------------------------------
+# ---------- Run ----------
 
 async def main() -> None:
     await store.init()
